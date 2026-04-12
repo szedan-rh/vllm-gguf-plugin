@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=77.0.3,<81.0.0", "wheel", "torch"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vllm-gguf-plugin"
+version = "0.1.0"
+description = "Out-of-tree GGUF quantization plugin for vLLM"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+dependencies = ["gguf>=0.17.0", "vllm"]
+
+[project.entry-points."vllm.general_plugins"]
+gguf = "vllm_gguf_plugin:register"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vllm_gguf_plugin*"]
