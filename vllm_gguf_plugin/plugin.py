@@ -1,5 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
+from functools import wraps
+from pathlib import Path
+
+import vllm.engine.arg_utils as arg_utils_module
+import vllm.transformers_utils.config as config_module
 from vllm.model_executor.layers.quantization import (
     QUANTIZATION_METHODS,
     get_quantization_config,
@@ -11,14 +16,103 @@ from vllm.model_executor.model_loader import (
     register_model_loader,
 )
 from vllm.config.load import LoadConfig
-from vllm.model_format import register_model_format
+from vllm.engine.arg_utils import EngineArgs
+from vllm.transformers_utils.config import get_config_parser, register_config_parser
 
+from .config_parser import GGUFConfigParser
+from .gguf_utils import check_gguf_file, is_gguf, is_remote_gguf, split_remote_gguf
 from .loader import GGUFModelLoader
-from .model_format import GGUFModelFormat
 from .quantization import GGUFConfig
 
 OOTGGUFConfig = GGUFConfig
 OOTGGUFModelLoader = GGUFModelLoader
+
+
+def _is_gguf_reference(model: str | None) -> bool:
+    if not model:
+        return False
+    return model.endswith(".gguf") or is_remote_gguf(model) or is_gguf(model)
+
+
+def _get_gguf_config_source(
+    model: str,
+    tokenizer: str | None,
+    hf_config_path: str | None,
+) -> str:
+    if hf_config_path is not None:
+        return hf_config_path
+    if tokenizer is not None and not _is_gguf_reference(tokenizer):
+        return tokenizer
+    if is_remote_gguf(model):
+        repo_id, _ = split_remote_gguf(model)
+        return repo_id
+    if check_gguf_file(model):
+        return str(Path(model).parent)
+    return model
+
+
+def _patch_engine_args() -> None:
+    if getattr(EngineArgs, "_gguf_create_model_config_patched", False):
+        return
+
+    original_create_model_config = EngineArgs.create_model_config
+
+    @wraps(original_create_model_config)
+    def create_model_config(self, *args, **kwargs):
+        if _is_gguf_reference(self.model):
+            gguf_model = self.model
+            if self.quantization is None:
+                self.quantization = "gguf"
+            if self.load_format == "auto":
+                self.load_format = "gguf"
+            if self.config_format == "auto":
+                self.config_format = "gguf"
+            if not self.model_weights:
+                self.model_weights = gguf_model
+            if self.served_model_name is None:
+                self.served_model_name = [gguf_model]
+            self.model = _get_gguf_config_source(
+                gguf_model,
+                self.tokenizer if isinstance(self.tokenizer, str) else None,
+                self.hf_config_path,
+            )
+        return original_create_model_config(self, *args, **kwargs)
+
+    EngineArgs.create_model_config = create_model_config
+    EngineArgs._gguf_create_model_config_patched = True
+
+
+def _patch_speculator_override() -> None:
+    if getattr(config_module, "_gguf_speculator_override_patched", False):
+        return
+
+    original_maybe_override_with_speculators = config_module.maybe_override_with_speculators
+
+    @wraps(original_maybe_override_with_speculators)
+    def maybe_override_with_speculators(
+        model,
+        tokenizer,
+        trust_remote_code,
+        revision,
+        vllm_speculative_config,
+        hf_token,
+        **kwargs,
+    ):
+        if _is_gguf_reference(model):
+            return model, tokenizer, vllm_speculative_config
+        return original_maybe_override_with_speculators(
+            model=model,
+            tokenizer=tokenizer,
+            trust_remote_code=trust_remote_code,
+            revision=revision,
+            vllm_speculative_config=vllm_speculative_config,
+            hf_token=hf_token,
+            **kwargs,
+        )
+
+    config_module.maybe_override_with_speculators = maybe_override_with_speculators
+    arg_utils_module.maybe_override_with_speculators = maybe_override_with_speculators
+    config_module._gguf_speculator_override_patched = True
 
 
 def register() -> None:
@@ -32,4 +126,11 @@ def register() -> None:
     ):
         register_model_loader("gguf")(GGUFModelLoader)
 
-    register_model_format(GGUFModelFormat())
+    try:
+        parser = get_config_parser("gguf")
+    except ValueError:
+        parser = None
+    if not isinstance(parser, GGUFConfigParser):
+        register_config_parser("gguf")(GGUFConfigParser)
+    _patch_engine_args()
+    _patch_speculator_override()

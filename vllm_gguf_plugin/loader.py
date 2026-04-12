@@ -51,7 +51,7 @@ class GGUFModelLoader(BaseModelLoader):
             )
 
     def _prepare_weights(self, model_config: ModelConfig):
-        model_name_or_path = model_config.model
+        model_name_or_path = model_config.model_weights or model_config.model
         if os.path.isfile(model_name_or_path):
             return model_name_or_path
         # repo id/filename.gguf
