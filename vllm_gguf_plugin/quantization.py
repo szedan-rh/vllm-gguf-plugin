@@ -558,7 +558,23 @@ def _gguf_embedding_weight_type_loader(
     _store_gguf_weight_type(param, loaded_weight)
 
 
-class GGUFWeightParameter(BasevLLMParameter):
+class _GGUFParamLoadMixin:
+    """Mixin providing GGUF parameter weight loading methods."""
+
+    def load_column_parallel_weight(self, loaded_weight: torch.Tensor):
+        self._store(loaded_weight)
+
+    def load_row_parallel_weight(self, loaded_weight: torch.Tensor):
+        self._store(loaded_weight)
+
+    def load_merged_column_weight(self, loaded_weight: torch.Tensor, **kwargs):
+        self._store(loaded_weight, shard_id=kwargs.get("shard_id"))
+
+    def load_qkv_weight(self, loaded_weight: torch.Tensor, **kwargs):
+        self._store(loaded_weight, shard_id=kwargs.get("shard_id"))
+
+
+class GGUFWeightParameter(_GGUFParamLoadMixin, BasevLLMParameter):
     def __init__(
         self,
         *,
@@ -584,59 +600,27 @@ class GGUFWeightParameter(BasevLLMParameter):
     def output_dim(self) -> int:
         return self._output_dim
 
-    def _store_loaded_weight(
+    def _store(
         self,
         loaded_weight: torch.Tensor,
         shard_id: int | str | None = None,
     ) -> None:
         _store_gguf_loaded_weight(self, loaded_weight, shard_id)
 
-    def load_column_parallel_weight(self, loaded_weight: torch.Tensor):
-        self._store_loaded_weight(loaded_weight)
 
-    def load_row_parallel_weight(self, loaded_weight: torch.Tensor):
-        self._store_loaded_weight(loaded_weight)
-
-    def load_merged_column_weight(self, loaded_weight: torch.Tensor, **kwargs):
-        self._store_loaded_weight(loaded_weight, shard_id=kwargs.get("shard_id"))
-
-    def load_qkv_weight(self, loaded_weight: torch.Tensor, **kwargs):
-        self._store_loaded_weight(loaded_weight, shard_id=kwargs.get("shard_id"))
-
-
-class GGUFWeightTypeParameter(BasevLLMParameter):
+class GGUFWeightTypeParameter(_GGUFParamLoadMixin, BasevLLMParameter):
     def __init__(self, *, data: torch.Tensor, weight_loader):
         self.weight_type = 0
         self.shard_weight_type: dict[int | str, int] = {}
         self.num_elements = data.numel()
         super().__init__(data=data, weight_loader=weight_loader)
 
-    def _store_weight_type(
+    def _store(
         self,
         loaded_weight: torch.Tensor,
         shard_id: int | str | None = None,
     ) -> None:
         _store_gguf_weight_type(self, loaded_weight, shard_id)
-
-    def load_column_parallel_weight(self, loaded_weight: torch.Tensor):
-        self._store_weight_type(loaded_weight)
-
-    def load_row_parallel_weight(self, loaded_weight: torch.Tensor):
-        self._store_weight_type(loaded_weight)
-
-    def load_merged_column_weight(self, loaded_weight: torch.Tensor, **kwargs):
-        self._store_weight_type(loaded_weight, shard_id=kwargs.get("shard_id"))
-
-    def load_qkv_weight(self, loaded_weight: torch.Tensor, **kwargs):
-        self._store_weight_type(loaded_weight, shard_id=kwargs.get("shard_id"))
-
-
-def _is_gguf_weight_param(param: Parameter) -> bool:
-    return isinstance(param, (GGUFWeightParameter, GGUFUninitializedWeightParameter))
-
-
-def _is_gguf_weight_type_param(param: Parameter) -> bool:
-    return isinstance(param, (GGUFWeightTypeParameter, GGUFUninitializedWeightTypeParameter))
 
 
 def _materialize_gguf_weight_parameter(
@@ -698,56 +682,22 @@ def _materialize_gguf_weight_type_parameter(
     layer.register_parameter(param_name, qweight_type)
 
 
-def _gguf_merged_weight_loader_v2(
+def _gguf_weight_loader_v2(
     self,
     param: Parameter,
     loaded_weight: torch.Tensor,
-    loaded_shard_id: tuple[int, ...] | int | None = None,
+    loaded_shard_id: tuple[int, ...] | int | str | None = None,
 ):
-    if _is_gguf_weight_param(param) or _is_gguf_weight_type_param(param):
+    if hasattr(param, "_store"):
         self.validate_shard_id(loaded_shard_id)
         if loaded_shard_id is None:
-            if _is_gguf_weight_type_param(param):
-                _store_gguf_weight_type(param, loaded_weight)
-            else:
-                _store_gguf_loaded_weight(param, loaded_weight)
+            param._store(loaded_weight)
             return
         if isinstance(loaded_shard_id, tuple):
             for idx in loaded_shard_id:
-                if _is_gguf_weight_type_param(param):
-                    _store_gguf_weight_type(param, loaded_weight, shard_id=idx)
-                else:
-                    _store_gguf_loaded_weight(param, loaded_weight, shard_id=idx)
+                param._store(loaded_weight, shard_id=idx)
             return
-
-        if _is_gguf_weight_type_param(param):
-            _store_gguf_weight_type(param, loaded_weight, shard_id=loaded_shard_id)
-        else:
-            _store_gguf_loaded_weight(param, loaded_weight, shard_id=loaded_shard_id)
-        return
-
-    return self._gguf_original_weight_loader_v2(param, loaded_weight, loaded_shard_id)
-
-
-def _gguf_qkv_weight_loader_v2(
-    self,
-    param: Parameter,
-    loaded_weight: torch.Tensor,
-    loaded_shard_id: str | None = None,
-):
-    if _is_gguf_weight_param(param) or _is_gguf_weight_type_param(param):
-        self.validate_shard_id(loaded_shard_id)
-        if loaded_shard_id is None:
-            if _is_gguf_weight_type_param(param):
-                _store_gguf_weight_type(param, loaded_weight)
-            else:
-                _store_gguf_loaded_weight(param, loaded_weight)
-            return
-
-        if _is_gguf_weight_type_param(param):
-            _store_gguf_weight_type(param, loaded_weight, shard_id=loaded_shard_id)
-        else:
-            _store_gguf_loaded_weight(param, loaded_weight, shard_id=loaded_shard_id)
+        param._store(loaded_weight, shard_id=loaded_shard_id)
         return
 
     return self._gguf_original_weight_loader_v2(param, loaded_weight, loaded_shard_id)
@@ -760,10 +710,8 @@ def _patch_gguf_weight_loader_v2(layer: torch.nn.Module) -> None:
         return
 
     layer._gguf_original_weight_loader_v2 = layer.weight_loader_v2
-    if isinstance(layer, QKVParallelLinear):
-        layer.weight_loader_v2 = MethodType(_gguf_qkv_weight_loader_v2, layer)
-    elif isinstance(layer, MergedColumnParallelLinear):
-        layer.weight_loader_v2 = MethodType(_gguf_merged_weight_loader_v2, layer)
+    if isinstance(layer, (QKVParallelLinear, MergedColumnParallelLinear)):
+        layer.weight_loader_v2 = MethodType(_gguf_weight_loader_v2, layer)
     layer._gguf_weight_loader_v2_patched = True
 
 
@@ -1125,34 +1073,16 @@ class GGUFEmbeddingMethod(GGUFLinearMethod):
         )
 
 
-class GGUFUninitializedWeightParameter(UninitializedParameter):
+class GGUFUninitializedWeightParameter(_GGUFParamLoadMixin, UninitializedParameter):
     cls_to_become = Parameter
     data_container: list[torch.Tensor]
 
-    def load_column_parallel_weight(self, loaded_weight: torch.Tensor):
-        _store_gguf_loaded_weight(self, loaded_weight)
-
-    def load_row_parallel_weight(self, loaded_weight: torch.Tensor):
-        _store_gguf_loaded_weight(self, loaded_weight)
-
-    def load_merged_column_weight(self, loaded_weight: torch.Tensor, **kwargs):
-        _store_gguf_loaded_weight(self, loaded_weight, shard_id=kwargs.get("shard_id"))
-
-    def load_qkv_weight(self, loaded_weight: torch.Tensor, **kwargs):
-        _store_gguf_loaded_weight(self, loaded_weight, shard_id=kwargs.get("shard_id"))
+    def _store(self, loaded_weight: torch.Tensor, shard_id=None):
+        _store_gguf_loaded_weight(self, loaded_weight, shard_id)
 
 
-class GGUFUninitializedWeightTypeParameter(UninitializedParameter):
+class GGUFUninitializedWeightTypeParameter(_GGUFParamLoadMixin, UninitializedParameter):
     cls_to_become = Parameter
 
-    def load_column_parallel_weight(self, loaded_weight: torch.Tensor):
-        _store_gguf_weight_type(self, loaded_weight)
-
-    def load_row_parallel_weight(self, loaded_weight: torch.Tensor):
-        _store_gguf_weight_type(self, loaded_weight)
-
-    def load_merged_column_weight(self, loaded_weight: torch.Tensor, **kwargs):
-        _store_gguf_weight_type(self, loaded_weight, shard_id=kwargs.get("shard_id"))
-
-    def load_qkv_weight(self, loaded_weight: torch.Tensor, **kwargs):
-        _store_gguf_weight_type(self, loaded_weight, shard_id=kwargs.get("shard_id"))
+    def _store(self, loaded_weight: torch.Tensor, shard_id=None):
+        _store_gguf_weight_type(self, loaded_weight, shard_id)
