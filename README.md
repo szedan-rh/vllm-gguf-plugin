@@ -9,7 +9,7 @@ handler with a fully out-of-tree GGUF implementation.
 ## Install
 
 ```bash
-uv pip install -e /home/mozf/develop-projects/vllm-gguf-plugin
+uv pip install -e . --torch-backend=auto
 ```
 
 ## How it works

@@ -54,26 +54,48 @@ class GGUFModelLoader(BaseModelLoader):
         model_name_or_path = model_config.model_weights or model_config.model
         if os.path.isfile(model_name_or_path):
             return model_name_or_path
-        # repo id/filename.gguf
-        if "/" in model_name_or_path and model_name_or_path.endswith(".gguf"):
-            repo_id, filename = model_name_or_path.rsplit("/", 1)
-            return hf_hub_download(repo_id=repo_id, filename=filename)
-        # repo_id:quant_type
-        elif "/" in model_name_or_path and ":" in model_name_or_path:
-            repo_id, quant_type = model_name_or_path.rsplit(":", 1)
+        # local_dir:quant_type (e.g. /path/to/gguf-dir:Q8_0)
+        if ":" in model_name_or_path:
+            local_dir, quant_type = model_name_or_path.rsplit(":", 1)
+            if os.path.isdir(local_dir):
+                return self._resolve_local_gguf(local_dir, quant_type)
+            # remote repo_id:quant_type
             return download_gguf(
-                repo_id,
+                local_dir,
                 quant_type,
                 cache_dir=self.load_config.download_dir,
                 revision=model_config.revision,
                 ignore_patterns=self.load_config.ignore_patterns,
             )
+        # repo id/filename.gguf
+        if "/" in model_name_or_path and model_name_or_path.endswith(".gguf"):
+            repo_id, filename = model_name_or_path.rsplit("/", 1)
+            return hf_hub_download(repo_id=repo_id, filename=filename)
 
         raise ValueError(
             f"Unrecognised GGUF reference: {model_name_or_path} "
-            "(expected local file, <repo_id>/<filename>.gguf, "
-            "or <repo_id>:<quant_type>)"
+            "(expected local file, <local_dir>:<quant_type>, "
+            "<repo_id>/<filename>.gguf, or <repo_id>:<quant_type>)"
         )
+
+    @staticmethod
+    def _resolve_local_gguf(local_dir: str, quant_type: str) -> str:
+        """Find a GGUF file matching *quant_type* in a local directory."""
+        import glob as glob_mod
+        patterns = [
+            f"*-{quant_type}.gguf",
+            f"*-{quant_type}-*.gguf",
+        ]
+        matches: list[str] = []
+        for pat in patterns:
+            matches.extend(glob_mod.glob(os.path.join(local_dir, pat)))
+        if not matches:
+            raise ValueError(
+                f"No GGUF file matching quant_type '{quant_type}' "
+                f"found in {local_dir}"
+            )
+        matches.sort(key=lambda x: (x.count("-"), x))
+        return matches[0]
 
     @staticmethod
     def _get_all_gguf_files(model_path: str) -> list[str]:

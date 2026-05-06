@@ -122,6 +122,20 @@ def split_remote_gguf(model: str | Path) -> tuple[str, str]:
     )
 
 
+def is_local_gguf_quant(model: str | Path) -> bool:
+    """Check if the model is a local path with GGUF quant type.
+
+    Recognizes ``local_dir:quant_type`` where *local_dir* is an existing
+    directory and *quant_type* is a known GGML quantization type
+    (e.g. ``Q8_0``, ``Q4_K_M``).
+    """
+    model = str(model)
+    if ":" not in model:
+        return False
+    path_part, quant_type = model.rsplit(":", 1)
+    return Path(path_part).is_dir() and is_valid_gguf_quant_type(quant_type)
+
+
 def is_gguf(model: str | Path) -> bool:
     """Check if the model is a GGUF model.
 
@@ -138,7 +152,11 @@ def is_gguf(model: str | Path) -> bool:
         return True
 
     # Check if it's a remote GGUF model (repo_id:quant_type format)
-    return is_remote_gguf(model)
+    if is_remote_gguf(model):
+        return True
+
+    # Check if it's a local dir:quant_type format
+    return is_local_gguf_quant(model)
 
 
 def detect_gguf_multimodal(model: str) -> Path | None:
