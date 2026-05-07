@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import glob
+import itertools
 import os
 from collections.abc import Generator
 from pathlib import Path
@@ -22,10 +23,12 @@ def download_gguf(
     revision: str | None = None,
     ignore_patterns: str | list[str] | None = None,
 ) -> str:
+    prefix_list = ["*.", "*-"]
+    suffix_list = ["-*", ""]
     allow_patterns = [
-        f"{prefix}-{qt}{suffix}.gguf"
+        f"{prefix}{qt}{suffix}.gguf"
         for qt in (quant_type.upper(), quant_type.lower())
-        for prefix, suffix in (("*", ""), ("*", "-*"), ("*/*", ""), ("*/*", "-*"))
+        for prefix, suffix in itertools.product(prefix_list, suffix_list)
     ]
 
     folder = snapshot_download(
