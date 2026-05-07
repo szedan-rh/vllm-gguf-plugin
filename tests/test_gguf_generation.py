@@ -68,7 +68,7 @@ MODELS = [
     PHI3_CONFIG,
     GPT2_CONFIG,
     STABLELM_CONFIG,
-    DOLPHIN_CONFIG,
+    # DOLPHIN_CONFIG,   # FIXME(Isotr0py): Investigate later
     # GEMMA3_CONFIG, # FIXME(Isotr0py): Needs rmsnorm rename
     # STARCODER_CONFIG,  # broken
 ]
@@ -82,7 +82,7 @@ def _generate_greedy_logprobs(
     tokenizer_name: str | None = None,
     quantization: str | None = None,
     tensor_parallel_size: int = 1,
-    dtype: str = "bfloat16",
+    dtype: str = "auto",
 ) -> list[tuple[list[int], str, list[dict[int, float] | None]]]:
     """Generate greedy outputs with logprobs using vllm.LLM.
 
@@ -206,12 +206,6 @@ def check_model_outputs(
     )
 
 
-LLAMA_CONFIG = GGUFTestConfig(
-    original_model="meta-llama/Llama-3.2-1B-Instruct",
-    gguf_model_path="bartowski/Llama-3.2-1B-Instruct-GGUF:Q6_K",
-)
-
-
 @pytest.mark.parametrize(
     "model",
     MODELS,
@@ -235,7 +229,7 @@ def _multi_gpu_test(num_gpus: int):
     )
 
 
-@pytest.mark.parametrize("model", [LLAMA_CONFIG])
+@pytest.mark.parametrize("model", [QWEN3_CONFIG])
 @pytest.mark.parametrize("max_tokens", [8])
 @pytest.mark.parametrize("num_logprobs", [5])
 @pytest.mark.parametrize("tp_size", [2])

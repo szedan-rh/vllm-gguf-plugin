@@ -1075,16 +1075,19 @@ class GGUFEmbeddingMethod(GGUFLinearMethod):
     def tie_weights(self, layer: torch.nn.Module, embed_tokens: "VocabParallelEmbedding"):
         return embed_tokens
 
-class GGUFUninitializedWeightParameter(_GGUFParamLoadMixin, UninitializedParameter):
+class GGUFUninitializedParameter(_GGUFParamLoadMixin, UninitializedParameter):
+    """Base class for uninitialized GGUF parameters."""
     cls_to_become = Parameter
+
+
+class GGUFUninitializedWeightParameter(GGUFUninitializedParameter):
     data_container: list[torch.Tensor]
 
     def _store(self, loaded_weight: torch.Tensor, shard_id=None):
         _store_gguf_loaded_weight(self, loaded_weight, shard_id)
 
 
-class GGUFUninitializedWeightTypeParameter(_GGUFParamLoadMixin, UninitializedParameter):
-    cls_to_become = Parameter
+class GGUFUninitializedWeightTypeParameter(GGUFUninitializedParameter):
 
     def _store(self, loaded_weight: torch.Tensor, shard_id=None):
         _store_gguf_weight_type(self, loaded_weight, shard_id)
