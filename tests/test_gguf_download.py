@@ -15,7 +15,7 @@ from vllm_gguf_plugin.weight_utils import download_gguf
 class TestGGUFDownload:
     """Test GGUF model downloading functionality."""
 
-    @patch("vllm_gguf_plugin.weight_utils.download_weights_from_hf")
+    @patch("vllm_gguf_plugin.weight_utils.snapshot_download")
     def test_download_gguf_single_file(self, mock_download):
         """Test downloading a single GGUF file."""
         mock_folder = "/tmp/mock_cache"
@@ -29,13 +29,17 @@ class TestGGUFDownload:
             result = download_gguf("unsloth/Qwen3-0.6B-GGUF", "IQ1_S")
 
             mock_download.assert_called_once_with(
-                model_name_or_path="unsloth/Qwen3-0.6B-GGUF",
+                repo_id="unsloth/Qwen3-0.6B-GGUF",
                 cache_dir=None,
                 allow_patterns=[
-                    "*-IQ1_S.gguf",
+                    "*.IQ1_S-*.gguf",
+                    "*.IQ1_S.gguf",
                     "*-IQ1_S-*.gguf",
-                    "*/*-IQ1_S.gguf",
-                    "*/*-IQ1_S-*.gguf",
+                    "*-IQ1_S.gguf",
+                    "*.iq1_s-*.gguf",
+                    "*.iq1_s.gguf",
+                    "*-iq1_s-*.gguf",
+                    "*-iq1_s.gguf",
                 ],
                 revision=None,
                 ignore_patterns=None,
@@ -43,7 +47,7 @@ class TestGGUFDownload:
 
             assert result == f"{mock_folder}/model-IQ1_S.gguf"
 
-    @patch("vllm_gguf_plugin.weight_utils.download_weights_from_hf")
+    @patch("vllm_gguf_plugin.weight_utils.snapshot_download")
     def test_download_gguf_sharded_files(self, mock_download):
         """Test downloading sharded GGUF files."""
         mock_folder = "/tmp/mock_cache"
@@ -63,7 +67,7 @@ class TestGGUFDownload:
 
             assert result == f"{mock_folder}/model-Q2_K-00001-of-00002.gguf"
 
-    @patch("vllm_gguf_plugin.weight_utils.download_weights_from_hf")
+    @patch("vllm_gguf_plugin.weight_utils.snapshot_download")
     def test_download_gguf_subdir(self, mock_download):
         """Test downloading GGUF files from subdirectory."""
         mock_folder = "/tmp/mock_cache"
@@ -80,7 +84,7 @@ class TestGGUFDownload:
 
             assert result == f"{mock_folder}/Q2_K/model-Q2_K.gguf"
 
-    @patch("vllm_gguf_plugin.weight_utils.download_weights_from_hf")
+    @patch("vllm_gguf_plugin.weight_utils.snapshot_download")
     @patch("glob.glob", return_value=[])
     def test_download_gguf_no_files_found(self, mock_glob, mock_download):
         """Test error when no GGUF files are found."""
@@ -127,7 +131,7 @@ class TestGGUFModelLoader:
             repo_id="unsloth/Qwen3-0.6B-GGUF", filename="model.gguf"
         )
 
-    @patch("vllm_gguf_plugin.weight_utils.download_weights_from_hf")
+    @patch("vllm_gguf_plugin.weight_utils.snapshot_download")
     @patch("glob.glob")
     @patch("os.path.isdir", return_value=False)
     @patch("os.path.isfile", return_value=False)
