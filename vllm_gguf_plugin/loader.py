@@ -431,8 +431,16 @@ class GGUFModelLoader(BaseModelLoader):
         all_extra_names = []
         for f in gguf_files:
             all_extra_names.extend(get_gguf_extra_tensor_names(f, gguf_weights_map))
-        if "lm_head.weight" in all_extra_names:
-            model_config.hf_config.update({"tie_word_embeddings": True})
+        # Determine tie_word_embeddings based on whether lm_head.weight exists
+        # in the GGUF file. If it's missing from the file, the model uses tied
+        # embeddings. If it's present with a (potentially different) quantization,
+        # we must NOT tie, otherwise the second weight load would fail with a
+        # shape mismatch (e.g. Q4_K embed vs Q6_K lm_head on GPT-2).
+        if "lm_head.weight" in gguf_weights_map.values():
+            if "lm_head.weight" in all_extra_names:
+                model_config.hf_config.update({"tie_word_embeddings": True})
+            else:
+                model_config.hf_config.update({"tie_word_embeddings": False})
 
         weight_type_map = self._get_gguf_weight_type(
             model_config, local_model_path, gguf_weights_map

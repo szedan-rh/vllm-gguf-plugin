@@ -1072,6 +1072,8 @@ class GGUFEmbeddingMethod(GGUFLinearMethod):
             x, qweight, qweight_type, hidden_size, dtype=self.params_dtype
         )
 
+    def tie_weights(self, layer: torch.nn.Module, embed_tokens: "VocabParallelEmbedding"):
+        return embed_tokens
 
 class GGUFUninitializedWeightParameter(_GGUFParamLoadMixin, UninitializedParameter):
     cls_to_become = Parameter
