@@ -459,6 +459,33 @@ def _resolve_gguf_weight_loader(
     )
 
 
+def _resolve_gguf_weight_type_loader(
+    layer: torch.nn.Module,
+    fallback_weight_loader=None,
+):
+    """Weight loader for GGUF weight-type parameters.
+
+    Wraps the layer's weight_loader_v2 but intercepts the
+    ``loaded_shard_id=None`` (fused-on-disk, e.g. GPT-2 c_attn) case.
+    For fused checkpoints all Q/K/V shards share the same quant type, so
+    we bypass ``_load_fused_module_from_checkpoint`` (which requires
+    ``output_dim`` and tries to ``narrow`` a scalar tensor) and simply
+    store the weight type directly.
+    """
+    base_loader = _resolve_gguf_weight_loader(layer, fallback_weight_loader)
+    if base_loader is None:
+        return fallback_weight_loader
+
+    def _gguf_weight_type_loader_v2(param, loaded_weight, loaded_shard_id=None):
+        if loaded_shard_id is None and hasattr(param, "_store"):
+            # Fused checkpoint: same quant type for all shards — store it once.
+            param._store(loaded_weight)
+            return
+        base_loader(param, loaded_weight, loaded_shard_id)
+
+    return _gguf_weight_type_loader_v2
+
+
 def _materialize_parameter_data(
     param: Parameter | UninitializedParameter,
     shape: tuple[int, ...],
@@ -770,11 +797,15 @@ class GGUFLinearMethod(LinearMethodBase):
         set_weight_attrs(qweight, extra_weight_attrs)
         layer.register_parameter("qweight", qweight)
 
+        weight_loader_type = _resolve_gguf_weight_type_loader(
+            layer, fallback_weight_loader
+        )
+        assert weight_loader_type is not None
         qweight_type = GGUFUninitializedWeightTypeParameter(requires_grad=False)
         set_weight_attrs(
             qweight_type,
             {
-                "weight_loader": weight_loader,
+                "weight_loader": weight_loader_type,
                 "needs_custom_weight_type": True,
                 "weight_type": 0,
                 "shard_weight_type": {},
@@ -870,8 +901,13 @@ class GGUFLinearMethod(LinearMethodBase):
             # dequantize shard weights respectively
             shard_id = ["q", "k", "v"] if "q" in shard_id else shard_id
             qweight = layer.qweight
+            # Fall back to the global weight_type when shard_weight_type was
+            # not populated (e.g. fused-on-disk checkpoints like GPT-2 c_attn
+            # where all Q/K/V share the same quant type).
+            fallback_wtype = layer.qweight_type.weight_type
             shard_weight_types = [
-                layer.qweight_type.shard_weight_type[idx] for idx in shard_id
+                layer.qweight_type.shard_weight_type.get(idx, fallback_wtype)
+                for idx in shard_id
             ]
             if len(set(shard_weight_types)) == 1:
                 out = fused_mul_mat_gguf(x, qweight, shard_weight_types[0])
@@ -881,7 +917,7 @@ class GGUFLinearMethod(LinearMethodBase):
             result = []
             for idx in shard_id:
                 start, end, offset = layer.qweight.shard_offset_map[idx]
-                qweight_type = layer.qweight_type.shard_weight_type[idx]
+                qweight_type = layer.qweight_type.shard_weight_type.get(idx, fallback_wtype)
                 result.append(
                     fused_mul_mat_gguf(
                         x, qweight[start:end, :offset].contiguous(), qweight_type
