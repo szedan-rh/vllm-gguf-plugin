@@ -27,6 +27,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
 MAX_TOKENS = 32
 NUM_LOGPROBS = 10
+GPU_MEMORY_UTILIZATION = 0.8
 
 
 class GGUFMMTestConfig(NamedTuple):
@@ -114,42 +115,45 @@ def _vllm_generate_greedy_logprobs(
         tokenizer=tokenizer_name,
         enforce_eager=True,
         dtype=dtype,
+        gpu_memory_utilization=GPU_MEMORY_UTILIZATION,
         max_model_len=max_model_len,
         mm_processor_kwargs=mm_processor_kwargs or None,
     )
-    sampling_params = SamplingParams(
-        temperature=0.0,
-        max_tokens=max_tokens,
-        logprobs=num_logprobs,
-    )
-    inputs = [
-        {"prompt": prompt, "multi_modal_data": {"image": image}}
-        for prompt, image in zip(prompts, images)
-    ]
-    outputs = llm.generate(inputs, sampling_params)
+    try:
+        sampling_params = SamplingParams(
+            temperature=0.0,
+            max_tokens=max_tokens,
+            logprobs=num_logprobs,
+        )
+        inputs = [
+            {"prompt": prompt, "multi_modal_data": {"image": image}}
+            for prompt, image in zip(prompts, images)
+        ]
+        outputs = llm.generate(inputs, sampling_params)
 
-    results = []
-    for req_output in outputs:
-        sample = req_output.outputs[0]
-        token_ids = list(sample.token_ids)
-        text = sample.text
-        logprobs_list: list[dict[int, float] | None] = []
-        if sample.logprobs:
-            for lp in sample.logprobs:
-                if lp is not None:
-                    logprobs_list.append(
-                        {tok_id: info.logprob for tok_id, info in lp.items()}
-                    )
-                else:
-                    logprobs_list.append(None)
-        results.append((token_ids, text, logprobs_list))
-
-    del llm
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-    return results
+        results = []
+        for req_output in outputs:
+            sample = req_output.outputs[0]
+            token_ids = list(sample.token_ids)
+            text = sample.text
+            logprobs_list: list[dict[int, float] | None] = []
+            if sample.logprobs:
+                for lp in sample.logprobs:
+                    if lp is not None:
+                        logprobs_list.append(
+                            {tok_id: info.logprob for tok_id, info in lp.items()}
+                        )
+                    else:
+                        logprobs_list.append(None)
+            results.append((token_ids, text, logprobs_list))
+        return results
+    finally:
+        llm.llm_engine.engine_core.shutdown()
+        del llm
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
 
 
 def _hf_generate_greedy_logprobs(
@@ -203,10 +207,11 @@ def _hf_generate_greedy_logprobs(
             )
         results.append((generated_ids.tolist(), text, logprobs_list))
 
-    del hf_model
+    del hf_model, processor
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
 
     return results
 
