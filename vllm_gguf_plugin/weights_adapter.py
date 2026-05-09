@@ -10,13 +10,16 @@ through the model's own ``load_weights`` / ``hf_to_vllm_mapper`` pipeline.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 import gguf
 import regex
 import torch
-from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
+from transformers import AutoModelForCausalLM
 from vllm.model_executor.models.utils import WeightsMapper
+
+from .weight_utils import gguf_quant_weights_iterator, gguf_quant_weights_iterator_multi
 
 if TYPE_CHECKING:
     from transformers import PretrainedConfig
@@ -55,6 +58,44 @@ class GGUFWeightsAdapter:
         back to the shared ``gguf_to_hf_name_map``.
         """
         return None
+
+    def transform_weight(
+        self,
+        hf_name: str,
+        weight: torch.Tensor,
+    ) -> torch.Tensor:
+        """Apply model-specific weight conversions after name mapping."""
+        return weight
+
+    def map_weights(
+        self,
+        weights: Iterable[tuple[str, torch.Tensor]],
+    ) -> Iterable[tuple[str, torch.Tensor]]:
+        for hf_name, weight in weights:
+            yield hf_name, self.transform_weight(hf_name, weight)
+
+    def load_extra_weights(
+        self,
+        gguf_file: str,
+        gguf_to_hf_name_map: dict[str, str],
+    ) -> Iterable[tuple[str, torch.Tensor]]:
+        mapper = self.get_weights_mapper()
+        if mapper is not None:
+            weights = mapper.apply(gguf_quant_weights_iterator_multi([gguf_file], None))
+        else:
+            weights = gguf_quant_weights_iterator(gguf_file, gguf_to_hf_name_map)
+        yield from self.map_weights(weights)
+
+    def load_weights(
+        self,
+        gguf_files: list[str],
+        gguf_to_hf_name_map: dict[str, str],
+    ) -> Iterable[tuple[str, torch.Tensor]]:
+        if len(gguf_files) > 1:
+            weights = gguf_quant_weights_iterator_multi(gguf_files, gguf_to_hf_name_map)
+        else:
+            weights = gguf_quant_weights_iterator(gguf_files[0], gguf_to_hf_name_map)
+        yield from self.map_weights(weights)
 
     def build_name_map(self, model_config: "ModelConfig") -> dict[str, str]:
         """Build the ``{gguf_name: hf_name}`` mapping for the main GGUF file.
@@ -275,21 +316,68 @@ def _build_gemma3_mapper() -> WeightsMapper:
 
 
 class Gemma3GGUFAdapter(GGUFWeightsAdapter):
-    """Adapter for Gemma3 multimodal GGUF models."""
+    """Adapter for Gemma3 GGUF models."""
 
     _EXTRA_PREFIXES = ("model.vision_tower.", "model.multi_modal_projector.")
     _mapper: WeightsMapper | None = None
+    _TEXT_PREFIX_RE = r"(?:model\.language_model\.)?model\."
+    _RMS_NORM_PATTERNS = (
+        regex.compile(rf"^{_TEXT_PREFIX_RE}norm\.weight$"),
+        regex.compile(
+            rf"^{_TEXT_PREFIX_RE}layers\.\d+\.(input|post_attention)_layernorm\.weight$"
+        ),
+        regex.compile(
+            rf"^{_TEXT_PREFIX_RE}layers\.\d+\.(pre|post)_feedforward_layernorm\.weight$"
+        ),
+        regex.compile(rf"^{_TEXT_PREFIX_RE}layers\.\d+\.self_attn\.[qk]_norm\.weight$"),
+        regex.compile(r"^model\.multi_modal_projector\.mm_soft_emb_norm\.weight$"),
+    )
+    _TEXT_GLOBAL_TENSORS = {
+        "token_embd.weight": "model.embed_tokens.weight",
+        "output_norm.weight": "model.norm.weight",
+        "output.weight": "lm_head.weight",
+    }
+    _TEXT_BLOCK_TENSORS = {
+        "attn_norm.weight": "input_layernorm.weight",
+        "post_attention_norm.weight": "post_attention_layernorm.weight",
+        "ffn_norm.weight": "pre_feedforward_layernorm.weight",
+        "post_ffw_norm.weight": "post_feedforward_layernorm.weight",
+        "attn_q_norm.weight": "self_attn.q_norm.weight",
+        "attn_k_norm.weight": "self_attn.k_norm.weight",
+        "attn_q.weight": "self_attn.q_proj.weight",
+        "attn_k.weight": "self_attn.k_proj.weight",
+        "attn_v.weight": "self_attn.v_proj.weight",
+        "attn_output.weight": "self_attn.o_proj.weight",
+        "ffn_gate.weight": "mlp.gate_proj.weight",
+        "ffn_up.weight": "mlp.up_proj.weight",
+        "ffn_down.weight": "mlp.down_proj.weight",
+    }
 
     @classmethod
     def matches(cls, config: "PretrainedConfig") -> bool:
-        return (
-            getattr(config, "model_type", None) == "gemma3"
-            and getattr(config, "vision_config", None) is not None
-        )
+        return getattr(config, "model_type", None) in ("gemma3", "gemma3_text")
 
-    @property
-    def auto_model_class(self):
-        return AutoModelForImageTextToText
+    def build_name_map(self, model_config: "ModelConfig") -> dict[str, str]:
+        config = model_config.hf_config
+        text_config = config.get_text_config()
+        text_prefix = ""
+        if getattr(config, "vision_config", None) is not None:
+            text_prefix = "model.language_model."
+
+        mapping: dict[str, str] = {}
+        for gguf_name, hf_name in self._TEXT_GLOBAL_TENSORS.items():
+            if hf_name == "lm_head.weight":
+                mapping[gguf_name] = hf_name
+            else:
+                mapping[gguf_name] = text_prefix + hf_name
+
+        for idx in range(text_config.num_hidden_layers):
+            for gguf_suffix, hf_suffix in self._TEXT_BLOCK_TENSORS.items():
+                mapping[f"blk.{idx}.{gguf_suffix}"] = (
+                    f"{text_prefix}model.layers.{idx}.{hf_suffix}"
+                )
+
+        return mapping
 
     def is_extra_param(self, hf_name: str) -> bool:
         return hf_name.startswith(self._EXTRA_PREFIXES)
@@ -303,6 +391,15 @@ class Gemma3GGUFAdapter(GGUFWeightsAdapter):
         if self._mapper is None:
             self._mapper = _build_gemma3_mapper()
         return self._mapper
+
+    def transform_weight(
+        self,
+        hf_name: str,
+        weight: torch.Tensor,
+    ) -> torch.Tensor:
+        if any(regex.fullmatch(p, hf_name) for p in self._RMS_NORM_PATTERNS):
+            return weight - 1
+        return weight
 
 
 # ---------------------------------------------------------------------------
@@ -320,4 +417,3 @@ def get_weights_adapter(config: "PretrainedConfig") -> GGUFWeightsAdapter:
         if cls.matches(config):
             return cls(config)
     return GGUFWeightsAdapter(config)
-

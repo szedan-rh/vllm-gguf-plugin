@@ -23,8 +23,6 @@ from .weight_utils import (
     download_gguf,
     get_gguf_extra_tensor_names,
     get_gguf_weight_type_map,
-    gguf_quant_weights_iterator,
-    gguf_quant_weights_iterator_multi,
 )
 from vllm.utils.torch_utils import set_default_torch_dtype
 
@@ -159,23 +157,10 @@ class GGUFModelLoader(BaseModelLoader):
         """Iterate over all GGUF weights, loading main file(s) then extra files."""
         adapter = get_weights_adapter(model_config.hf_config)
         for extra_file in adapter.extra_gguf_files(model_name_or_path):
-            mapper = adapter.get_weights_mapper()
-            if mapper is not None:
-                yield from mapper.apply(
-                    gguf_quant_weights_iterator_multi([extra_file], None)
-                )
-            else:
-                yield from gguf_quant_weights_iterator(extra_file, gguf_to_hf_name_map)
+            yield from adapter.load_extra_weights(extra_file, gguf_to_hf_name_map)
 
         gguf_files = self._get_all_gguf_files(model_name_or_path)
-        if len(gguf_files) > 1:
-            yield from gguf_quant_weights_iterator_multi(
-                gguf_files, gguf_to_hf_name_map
-            )
-        else:
-            yield from gguf_quant_weights_iterator(
-                model_name_or_path, gguf_to_hf_name_map
-            )
+        yield from adapter.load_weights(gguf_files, gguf_to_hf_name_map)
 
     def download_model(self, model_config: ModelConfig) -> None:
         self._prepare_weights(model_config)

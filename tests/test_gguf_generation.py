@@ -69,7 +69,7 @@ MODELS = [
     GPT2_CONFIG,
     STABLELM_CONFIG,
     # DOLPHIN_CONFIG,   # FIXME(Isotr0py): Investigate later
-    # GEMMA3_CONFIG, # FIXME(Isotr0py): Needs rmsnorm rename
+    GEMMA3_CONFIG,
     # STARCODER_CONFIG,  # broken
 ]
 
