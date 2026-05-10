@@ -1,21 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import sys
 from functools import wraps
 from pathlib import Path
 
 import vllm.engine.arg_utils as arg_utils_module
 import vllm.transformers_utils.config as config_module
 from vllm.model_executor.layers.quantization import (
-    QUANTIZATION_METHODS,
-    get_quantization_config,
+    _CUSTOMIZED_METHOD_TO_QUANT_CONFIG,
     register_quantization_config,
 )
 from vllm.model_executor.model_loader import (
     _LOAD_FORMAT_TO_MODEL_LOADER,
-    get_model_loader,
     register_model_loader,
 )
-from vllm.config.load import LoadConfig
 from vllm.engine.arg_utils import EngineArgs
 from vllm.transformers_utils.config import get_config_parser, register_config_parser
 
@@ -81,15 +79,31 @@ def _patch_engine_args() -> None:
     EngineArgs.create_model_config = create_model_config
     EngineArgs._gguf_create_model_config_patched = True
 
+
+def _patch_speculator_probe() -> None:
+    if getattr(config_module, "_gguf_speculator_probe_patched", False):
+        return
+
+    original_maybe_override = config_module.maybe_override_with_speculators
+
+    @wraps(original_maybe_override)
+    def maybe_override_with_speculators(model, tokenizer, *args, **kwargs):
+        if _is_gguf_reference(model):
+            return model, tokenizer, kwargs.get("vllm_speculative_config")
+        return original_maybe_override(model, tokenizer, *args, **kwargs)
+
+    config_module.maybe_override_with_speculators = maybe_override_with_speculators
+    config_module._gguf_speculator_probe_patched = True
+
 def register() -> None:
     """Register the out-of-tree GGUF integration."""
-    if "gguf" not in QUANTIZATION_METHODS or get_quantization_config("gguf") is not GGUFConfig:
+    if _CUSTOMIZED_METHOD_TO_QUANT_CONFIG.get("gguf") is not GGUFConfig:
         register_quantization_config("gguf")(GGUFConfig)
+    sys.modules["vllm.model_executor.layers.quantization.gguf"] = sys.modules[
+        GGUFConfig.__module__
+    ]
 
-    if (
-        "gguf" not in _LOAD_FORMAT_TO_MODEL_LOADER
-        or not isinstance(get_model_loader(LoadConfig(load_format="gguf")), GGUFModelLoader)
-    ):
+    if _LOAD_FORMAT_TO_MODEL_LOADER.get("gguf") is not GGUFModelLoader:
         register_model_loader("gguf")(GGUFModelLoader)
 
     try:
@@ -99,3 +113,4 @@ def register() -> None:
     if not isinstance(parser, GGUFConfigParser):
         register_config_parser("gguf")(GGUFConfigParser)
     _patch_engine_args()
+    _patch_speculator_probe()
