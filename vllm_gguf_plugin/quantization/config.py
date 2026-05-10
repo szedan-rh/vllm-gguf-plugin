@@ -71,10 +71,6 @@ class GGUFConfig(QuantizationConfig):
             return "gguf"
         return None
 
-    @classmethod
-    def requires_hf_quant_config(cls) -> bool:
-        return False
-
     def get_quant_method(
         self, layer: torch.nn.Module, prefix: str
     ) -> "QuantizeMethodBase | None":
