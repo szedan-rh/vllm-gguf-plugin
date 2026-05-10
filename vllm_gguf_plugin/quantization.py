@@ -584,6 +584,65 @@ def _gguf_embedding_weight_type_loader(
     _store_gguf_weight_type(param, loaded_weight)
 
 
+def _materialize_gguf_moe_param(
+    layer: FusedMoE,
+    param: Parameter | UninitializedParameter,
+    loaded_weight: torch.Tensor,
+    shard_id: str,
+) -> None:
+    if not isinstance(param, UninitializedParameter):
+        return
+
+    shard_dim = {"w1": 0, "w2": 1, "w3": 0}[shard_id]
+    if getattr(param, "is_transposed", False):
+        shard_dim = int(not shard_dim)
+
+    full_load = len(loaded_weight.shape) == 3
+    if not full_load:
+        return
+
+    shard_dim += 1
+    final_shape = list(loaded_weight.shape)
+    if shard_id in {"w1", "w3"}:
+        final_shape[1] *= 2
+    final_shape[shard_dim] = final_shape[shard_dim] // layer.tp_size
+    param.materialize(tuple(final_shape), dtype=loaded_weight.dtype)
+
+
+def _gguf_moe_weight_loader(
+    layer: FusedMoE,
+    base_weight_loader,
+    param: Parameter | UninitializedParameter,
+    loaded_weight: torch.Tensor,
+    weight_name: str,
+    shard_id: str,
+    expert_id: int,
+    return_success: bool = False,
+) -> bool | None:
+    _materialize_gguf_moe_param(layer, param, loaded_weight, shard_id)
+    return base_weight_loader(
+        param,
+        loaded_weight,
+        weight_name,
+        shard_id=shard_id,
+        expert_id=expert_id,
+        return_success=return_success,
+    )
+
+
+def _gguf_moe_weight_type_loader(
+    param: Parameter | UninitializedParameter,
+    loaded_weight: torch.Tensor,
+    weight_name: str,
+    shard_id: str,
+    expert_id: int,
+    return_success: bool = False,
+) -> bool | None:
+    del weight_name, expert_id
+    _store_gguf_weight_type(param, loaded_weight, shard_id)
+    return True if return_success else None
+
+
 class _GGUFParamLoadMixin:
     """Mixin providing GGUF parameter weight loading methods.
 
@@ -788,7 +847,6 @@ class GGUFLinearMethod(LinearMethodBase):
                 "input_dim": 1,
                 "output_dim": 0,
                 "tensor_shape": tensor_shape,
-                "needs_custom_weight_materialization": True,
                 "data_container": [],
                 "shard_id": [],
                 "shard_id_map": {},
@@ -806,7 +864,6 @@ class GGUFLinearMethod(LinearMethodBase):
             qweight_type,
             {
                 "weight_loader": weight_loader_type,
-                "needs_custom_weight_type": True,
                 "weight_type": 0,
                 "shard_weight_type": {},
                 "num_elements": len(output_partition_sizes),
@@ -957,28 +1014,33 @@ class GGUFMoEMethod(FusedMoEMethodBase):
         params_dtype: torch.dtype,
         **extra_weight_attrs,
     ):
+        base_weight_loader = extra_weight_attrs.pop("weight_loader")
         tensor_shape = (num_experts, 2 * intermediate_size_per_partition, hidden_size)
         # gate up proj
         w13_qweight = GGUFUninitializedWeightParameter(requires_grad=False)
         set_weight_attrs(
             w13_qweight,
             {
+                "weight_loader": partial(_gguf_moe_weight_loader, layer, base_weight_loader),
                 "input_dim": 1,
                 "output_dim": 0,
                 "tensor_shape": tensor_shape,
-                "needs_custom_weight_materialization": True,
                 "data_container": [],
             },
         )
         set_weight_attrs(w13_qweight, extra_weight_attrs)
         layer.register_parameter("w13_qweight", w13_qweight)
 
-        w13_qweight_type = Parameter(
-            torch.empty(1, dtype=torch.uint8), requires_grad=False
-        )
+        w13_qweight_type = GGUFUninitializedWeightTypeParameter(requires_grad=False)
         set_weight_attrs(
             w13_qweight_type,
-            {"needs_custom_weight_type": True, "weight_type": 0, "ignore_warning": True},
+            {
+                "weight_loader": _gguf_moe_weight_type_loader,
+                "weight_type": 0,
+                "shard_weight_type": {},
+                "num_elements": 1,
+                "ignore_warning": True,
+            },
         )
         set_weight_attrs(w13_qweight_type, extra_weight_attrs)
         layer.register_parameter("w13_qweight_type", w13_qweight_type)
@@ -989,22 +1051,26 @@ class GGUFMoEMethod(FusedMoEMethodBase):
         set_weight_attrs(
             w2_qweight,
             {
+                "weight_loader": partial(_gguf_moe_weight_loader, layer, base_weight_loader),
                 "input_dim": 1,
                 "output_dim": 0,
                 "tensor_shape": tensor_shape,
-                "needs_custom_weight_materialization": True,
                 "data_container": [],
             },
         )
         set_weight_attrs(w2_qweight, extra_weight_attrs)
         layer.register_parameter("w2_qweight", w2_qweight)
 
-        w2_qweight_type = Parameter(
-            torch.empty(1, dtype=torch.uint8), requires_grad=False
-        )
+        w2_qweight_type = GGUFUninitializedWeightTypeParameter(requires_grad=False)
         set_weight_attrs(
             w2_qweight_type,
-            {"needs_custom_weight_type": True, "weight_type": 0, "ignore_warning": True},
+            {
+                "weight_loader": _gguf_moe_weight_type_loader,
+                "weight_type": 0,
+                "shard_weight_type": {},
+                "num_elements": 1,
+                "ignore_warning": True,
+            },
         )
 
         set_weight_attrs(w2_qweight_type, extra_weight_attrs)
@@ -1071,7 +1137,6 @@ class GGUFEmbeddingMethod(GGUFLinearMethod):
                 "input_dim": 1,
                 "output_dim": 0,
                 "tensor_shape": tensor_shape,
-                "needs_custom_weight_materialization": True,
                 "data_container": [],
                 "shard_id": [],
                 "shard_id_map": {},
@@ -1085,7 +1150,6 @@ class GGUFEmbeddingMethod(GGUFLinearMethod):
             qweight_type,
             {
                 "weight_loader": _gguf_embedding_weight_type_loader,
-                "needs_custom_weight_type": True,
                 "weight_type": 0,
                 "shard_weight_type": {},
                 "num_elements": 1,
