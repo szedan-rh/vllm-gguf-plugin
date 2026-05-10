@@ -61,6 +61,11 @@ GEMMA3_CONFIG = GGUFTestConfig(
     gguf_model_path="ggml-org/gemma-3-270m-it-qat-GGUF:Q4_0",
 )
 
+OLMOE_CONFIG = GGUFTestConfig(
+    original_model="allenai/OLMoE-1B-7B-0125",
+    gguf_model_path="allenai/OLMoE-1B-7B-0125-GGUF:Q4_0",
+)
+
 MODELS = [
     # LLAMA_CONFIG,  # broken: https://github.com/vllm-project/vllm/issues/19458
     QWEN2_CONFIG,
