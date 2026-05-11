@@ -15,7 +15,7 @@ import torch
 from transformers import AutoModelForCausalLM
 from vllm.logger import init_logger
 
-from .base import BaseGGUFWeightsAdapter
+from .base import BaseGGUFWeightsAdapter, GGUFLoadSpec
 from ..gguf_utils import maybe_patch_hf_config_from_gguf
 from ..weight_utils import (
     get_gguf_extra_tensor_names,
@@ -32,6 +32,8 @@ logger = init_logger(__name__)
 
 class GGUFWeightsAdapter(BaseGGUFWeightsAdapter):
     """Default adapter for GGUF models."""
+
+    load_spec = None
 
     @classmethod
     def matches(cls, config) -> bool:
@@ -299,16 +301,20 @@ class GGUFWeightsAdapter(BaseGGUFWeightsAdapter):
             model_path, model_config.hf_config, gguf_to_hf_name_map
         )
         weight_type_map = self.get_weight_type_map(model_path, gguf_to_hf_name_map)
-        return GGUFLoadSpec(
+        self.load_spec = GGUFLoadSpec(
+            weights_source=self._get_all_gguf_files(model_path),
             gguf_to_hf_name_map=gguf_to_hf_name_map,
             unquantized_modules=self.get_unquantized_modules(weight_type_map),
         )
+        return self.load_spec
 
-    def load_weights(
+    def prepare_weights(
         self,
-        model_path: str,
-        gguf_to_hf_name_map: dict[str, str] = None,
+        model_config: "ModelConfig",
     ) -> Iterable[tuple[str, torch.Tensor]]:
-        gguf_files = self._get_all_gguf_files(model_path)
-        weights = gguf_quant_weights_iterator_multi(gguf_files, gguf_to_hf_name_map)
+        del model_config
+        weights = gguf_quant_weights_iterator_multi(
+            self.load_spec.weights_source,
+            self.load_spec.gguf_to_hf_name_map,
+        )
         yield from self.map_weights(weights)

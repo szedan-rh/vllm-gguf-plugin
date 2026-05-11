@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 class GGUFLoadSpec:
     weights_source: list[str]
     unquantized_modules: list[str]
+    gguf_to_hf_name_map: dict[str, str] | None = None
 
 
 class BaseGGUFWeightsAdapter(ABC):
