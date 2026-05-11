@@ -14,14 +14,12 @@ import regex
 import torch
 from transformers import AutoModelForCausalLM
 from vllm.logger import init_logger
-from vllm.model_executor.models.utils import WeightsMapper
 
 from .base import BaseGGUFWeightsAdapter
 from ..gguf_utils import maybe_patch_hf_config_from_gguf
 from ..weight_utils import (
     get_gguf_extra_tensor_names,
     get_gguf_weight_type_map,
-    gguf_quant_weights_iterator,
     gguf_quant_weights_iterator_multi,
 )
 
@@ -30,12 +28,6 @@ if TYPE_CHECKING:
     from vllm.config import ModelConfig
 
 logger = init_logger(__name__)
-
-
-@dataclass(slots=True)
-class GGUFLoadSpec:
-    gguf_to_hf_name_map: dict[str, str]
-    unquantized_modules: list[str]
 
 
 class GGUFWeightsAdapter(BaseGGUFWeightsAdapter):
@@ -158,7 +150,7 @@ class GGUFWeightsAdapter(BaseGGUFWeightsAdapter):
 
         text_name_map = gguf.get_tensor_name_map(arch, text_config.num_hidden_layers)
 
-        if is_multimodal and self.get_weights_mapper() is None:
+        if is_multimodal:
             mm_proj_arch = gguf.MODEL_ARCH.MMPROJ
             vision_name_map = gguf.get_tensor_name_map(
                 mm_proj_arch, config.vision_config.num_hidden_layers
@@ -217,8 +209,6 @@ class GGUFWeightsAdapter(BaseGGUFWeightsAdapter):
 
         unmapped_params = []
         for hf_name in state_dict:
-            if self.is_extra_param(hf_name):
-                continue
             gguf_name_with_suffix = find_hf_name_in_tensor_map(hf_name)
             if gguf_name_with_suffix is not None:
                 gguf_to_hf_name_map[gguf_name_with_suffix] = hf_name
@@ -288,19 +278,6 @@ class GGUFWeightsAdapter(BaseGGUFWeightsAdapter):
             weight_type_map.update(
                 get_gguf_weight_type_map(gguf_file, gguf_to_hf_name_map)
             )
-        for extra_file in self.extra_gguf_files(model_path):
-            logger.info("Loading extra mm_proj weights from %s...", extra_file)
-            mapper = self.get_weights_mapper()
-            if mapper is not None:
-                raw = {
-                    tensor.name: tensor.tensor_type.name
-                    for tensor in gguf.GGUFReader(extra_file).tensors
-                }
-                weight_type_map.update(mapper.apply_dict(raw))
-            else:
-                weight_type_map.update(
-                    get_gguf_weight_type_map(extra_file, gguf_to_hf_name_map)
-                )
         return weight_type_map
 
     @staticmethod
@@ -327,25 +304,11 @@ class GGUFWeightsAdapter(BaseGGUFWeightsAdapter):
             unquantized_modules=self.get_unquantized_modules(weight_type_map),
         )
 
-    def load_extra_weights(
-        self,
-        gguf_file: str,
-        gguf_to_hf_name_map: dict[str, str],
-    ) -> Iterable[tuple[str, torch.Tensor]]:
-        mapper = self.get_weights_mapper()
-        if mapper is not None:
-            weights = mapper.apply(gguf_quant_weights_iterator_multi([gguf_file], None))
-        else:
-            weights = gguf_quant_weights_iterator(gguf_file, gguf_to_hf_name_map)
-        yield from self.map_weights(weights)
-
     def load_weights(
         self,
         model_path: str,
-        gguf_to_hf_name_map: dict[str, str],
+        gguf_to_hf_name_map: dict[str, str] = None,
     ) -> Iterable[tuple[str, torch.Tensor]]:
         gguf_files = self._get_all_gguf_files(model_path)
-        for extra_file in self.extra_gguf_files(model_path):
-            yield from self.load_extra_weights(extra_file, gguf_to_hf_name_map)
         weights = gguf_quant_weights_iterator_multi(gguf_files, gguf_to_hf_name_map)
         yield from self.map_weights(weights)

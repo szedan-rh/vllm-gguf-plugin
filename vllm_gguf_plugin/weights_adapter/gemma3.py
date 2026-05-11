@@ -3,120 +3,120 @@
 
 from __future__ import annotations
 
-import re
+from typing import TYPE_CHECKING
+from collections.abc import Iterable
 
 import torch
 from vllm.model_executor.models.utils import WeightsMapper
 
-from .default import GGUFWeightsAdapter
-
-_VT = "model.vision_tower.vision_model."
-_MM = "model.multi_modal_projector."
-
-_BLK_COMP: dict[str, str] = {
-    "ln1": "layer_norm1",
-    "ln2": "layer_norm2",
-    "attn_q": "self_attn.q_proj",
-    "attn_k": "self_attn.k_proj",
-    "attn_v": "self_attn.v_proj",
-    "attn_out": "self_attn.out_proj",
-    "ffn_down": "mlp.fc1",
-    "ffn_up": "mlp.fc2",
-}
+from .base import BaseGGUFWeightsAdapter, GGUFLoadSpec
+from ..gguf_utils import detect_gguf_multimodal, maybe_patch_hf_config_from_gguf
+from ..weight_utils import gguf_quant_weights_iterator_multi, get_gguf_unquantized_params
 
 
-def _build_gemma3_mapper() -> WeightsMapper:
-    orig_to_new_regex: dict[re.Pattern, str] = {
-        re.compile(rf"^v\.blk\.(\d+)\.{gguf_comp}\.(weight|bias)$"): (
-            rf"{_VT}encoder.layers.\1.{vllm_comp}.\2"
-        )
-        for gguf_comp, vllm_comp in _BLK_COMP.items()
-    }
+if TYPE_CHECKING:
+    from transformers import PretrainedConfig
+    from vllm.config import ModelConfig
+
+
+def build_gemma3_mapper(is_multimodal: bool) -> WeightsMapper:
+    backbone_prefix = "language_model.model." if is_multimodal else "model."
     orig_to_new_prefix: dict[str, str] = {
-        "mm.input_projection.weight": f"{_MM}mm_input_projection_weight",
-        "mm.soft_emb_norm.weight": f"{_MM}mm_soft_emb_norm.weight",
-        "v.patch_embd.weight": f"{_VT}embeddings.patch_embedding.weight",
-        "v.patch_embd.bias": f"{_VT}embeddings.patch_embedding.bias",
-        "v.position_embd.weight": f"{_VT}embeddings.position_embedding.weight",
-        "v.post_ln.weight": f"{_VT}post_layernorm.weight",
-        "v.post_ln.bias": f"{_VT}post_layernorm.bias",
+        # vision tower
+        "v.blk.": "vision_tower.vision_model.encoder.layers.",
+        "v.patch_embd.": "vision_tower.vision_model.embeddings.patch_embedding.",
+        "v.position_embd.": "vision_tower.vision_model.embeddings.position_embedding.",
+        "v.post_ln.": "vision_tower.vision_model.post_layernorm.",
+        # mm projector
+        "mm.input_projection.weight": "multi_modal_projector.mm_input_projection_weight",
+        "mm.soft_emb_norm.": "multi_modal_projector.mm_soft_emb_norm.",
+        # text backbone (without language model prefix)
+        "token_embd.": backbone_prefix + "embed_tokens.",
+        "blk.": backbone_prefix + "layers.",
+        "output_norm.": backbone_prefix + "norm.",
+        "output.": backbone_prefix + "lm_head.",
     }
+    orig_to_new_substr: dict[str, str] = {
+        # vision tower
+        "ln1.": "layer_norm1.",
+        "ln2.": "layer_norm2.",
+        "attn_q.": "self_attn.q_proj.",
+        "attn_k.": "self_attn.k_proj.",
+        "attn_v.": "self_attn.v_proj.",
+        "attn_out.": "self_attn.out_proj.",
+        # text backbone
+        "attn_output.": "self_attn.o_proj.",
+        "attn_q_norm.": "self_attn.q_norm.",
+        "attn_k_norm.": "self_attn.k_norm.",
+        "attn_norm.": "input_layernorm.",
+        "post_attention_norm.": "post_attention_layernorm.",
+        "ffn_norm.": "pre_feedforward_layernorm.",
+        "post_ffw_norm.": "post_feedforward_layernorm.",
+        "ffn_gate.": "mlp.gate_proj.",
+        "ffn_up.": "mlp.up_proj.",
+        "ffn_down.": "mlp.down_proj.",
+    }
+
     return WeightsMapper(
-        orig_to_new_regex=orig_to_new_regex,
         orig_to_new_prefix=orig_to_new_prefix,
+        orig_to_new_substr=orig_to_new_substr,
     )
 
 
-class Gemma3GGUFAdapter(GGUFWeightsAdapter):
+class Gemma3GGUFAdapter(BaseGGUFWeightsAdapter):
     """Adapter for Gemma3 GGUF models."""
 
-    _EXTRA_PREFIXES = ("model.vision_tower.", "model.multi_modal_projector.")
-    _mapper: WeightsMapper | None = None
-    _TEXT_GLOBAL_TENSORS = {
-        "token_embd.weight": "embed_tokens.weight",
-        "output_norm.weight": "norm.weight",
-        "output.weight": "lm_head.weight",
-    }
-    _TEXT_BLOCK_TENSORS = {
-        "attn_norm.weight": "input_layernorm.weight",
-        "post_attention_norm.weight": "post_attention_layernorm.weight",
-        "ffn_norm.weight": "pre_feedforward_layernorm.weight",
-        "post_ffw_norm.weight": "post_feedforward_layernorm.weight",
-        "attn_q_norm.weight": "self_attn.q_norm.weight",
-        "attn_k_norm.weight": "self_attn.k_norm.weight",
-        "attn_q.weight": "self_attn.q_proj.weight",
-        "attn_k.weight": "self_attn.k_proj.weight",
-        "attn_v.weight": "self_attn.v_proj.weight",
-        "attn_output.weight": "self_attn.o_proj.weight",
-        "ffn_gate.weight": "mlp.gate_proj.weight",
-        "ffn_up.weight": "mlp.up_proj.weight",
-        "ffn_down.weight": "mlp.down_proj.weight",
-    }
+    mapper = None
+    load_spec = None
 
     @classmethod
     def matches(cls, config) -> bool:
-        return getattr(config, "model_type", None) in ("gemma3", "gemma3_text")
+        return config.model_type in ("gemma3", "gemma3_text")
 
-    def build_name_map(self, model_config) -> dict[str, str]:
-        config = model_config.hf_config
-        text_config = config.get_text_config()
-        is_multimodal = getattr(config, "vision_config", None) is not None
-        text_prefix = "model.language_model." if is_multimodal else "model."
+    def patch_hf_config(self, model_path: str, hf_config: "PretrainedConfig"):
+        return maybe_patch_hf_config_from_gguf(model_path, hf_config)
 
-        mapping: dict[str, str] = {}
-        for gguf_name, hf_name in self._TEXT_GLOBAL_TENSORS.items():
-            if hf_name == "lm_head.weight":
-                mapping[gguf_name] = hf_name
-            else:
-                mapping[gguf_name] = text_prefix + hf_name
-
-        for idx in range(text_config.num_hidden_layers):
-            for gguf_suffix, hf_suffix in self._TEXT_BLOCK_TENSORS.items():
-                mapping[f"blk.{idx}.{gguf_suffix}"] = (
-                    f"{text_prefix}layers.{idx}.{hf_suffix}"
-                )
-
-        return mapping
-
-    def is_extra_param(self, hf_name: str) -> bool:
-        return hf_name.startswith(self._EXTRA_PREFIXES)
-
-    def extra_gguf_files(self, model_path: str) -> list[str]:
-        from ..gguf_utils import detect_gguf_multimodal
-
-        mmproj = detect_gguf_multimodal(model_path)
-        return [mmproj] if mmproj else []
-
-    def get_weights_mapper(self) -> WeightsMapper:
-        if self._mapper is None:
-            self._mapper = _build_gemma3_mapper()
-        return self._mapper
+    def prepare_weights(self, model_config: "ModelConfig") -> Iterable[tuple[str, torch.Tensor]]:
+        """Return HF-style weights."""
+        orig_weights = gguf_quant_weights_iterator_multi(
+            self.load_spec.weights_source
+        )
+        yield from self.transform_weight(self.mapper.apply(orig_weights))
+    
+    def prepare_loading(
+        self,
+        model_path: str,
+        model_config: "ModelConfig",
+    ) -> GGUFLoadSpec:
+        model_config.hf_config = self.patch_hf_config(model_path, model_config.hf_config)
+        gguf_files = [model_path]
+        mm_proj_path = detect_gguf_multimodal(model_path)
+        if mm_proj_path:
+            gguf_files.append(mm_proj_path)
+        self.mapper = build_gemma3_mapper(is_multimodal=mm_proj_path is not None)
+        unquantized_params = get_gguf_unquantized_params(gguf_files)
+        unquantized_modules = list(
+            {
+                param.rsplit(".", 1)[0] if param.endswith(".weight") else param
+                for param in self.mapper.apply_list(unquantized_params)
+            }
+        )
+        self.load_spec = GGUFLoadSpec(
+            weights_source=gguf_files,
+            unquantized_modules=unquantized_modules,
+        )
 
     def transform_weight(
         self,
-        hf_name: str,
-        weight: torch.Tensor,
-    ) -> torch.Tensor:
-        if hf_name.endswith("norm.weight"):
-            return weight - 1
-        return weight
+        weights: Iterable[tuple[str, torch.Tensor]],
+    ) -> Iterable[tuple[str, torch.Tensor]]:
+        """Transform raw GGUF weights to HF-style weights."""
+        for name, weight in weights:
+            if name.endswith("norm.weight"):
+                weight = weight + 1
+            elif name.startswith("vision_tower") and "mlp.up_proj." in name:
+                name = name.replace("mlp.up_proj.", "mlp.fc2.")
+            elif name.startswith("vision_tower") and "mlp.down_proj." in name:
+                name = name.replace("mlp.down_proj.", "mlp.fc1.")
+            yield name, weight
+

@@ -52,6 +52,25 @@ def download_gguf(
     return local_files[0]
 
 
+def resolve_local_gguf(local_dir: str, quant_type: str) -> str:
+    """Find a GGUF file matching *quant_type* in a local directory."""
+    import glob as glob_mod
+    patterns = [
+        f"*-{quant_type}.gguf",
+        f"*-{quant_type}-*.gguf",
+    ]
+    matches: list[str] = []
+    for pat in patterns:
+        matches.extend(glob_mod.glob(os.path.join(local_dir, pat)))
+    if not matches:
+        raise ValueError(
+            f"No GGUF file matching quant_type '{quant_type}' "
+            f"found in {local_dir}"
+        )
+    matches.sort(key=lambda x: (x.count("-"), x))
+    return matches[0]
+
+
 def get_gguf_extra_tensor_names(
     gguf_file: str | Path, gguf_to_hf_name_map: dict[str, str]
 ) -> list[str]:
@@ -80,7 +99,7 @@ def gguf_quant_weights_iterator(
 
 
 def gguf_quant_weights_iterator_multi(
-    gguf_files: list[str], gguf_to_hf_name_map: dict[str, str] | None
+    gguf_files: list[str], gguf_to_hf_name_map: dict[str, str] | None = None
 ) -> Generator[tuple[str, torch.Tensor], None, None]:
     """Yield ``(name, tensor)`` for all tensors in *gguf_files*.
 
@@ -115,3 +134,20 @@ def gguf_quant_weights_iterator_multi(
             else:
                 param = torch.tensor(weight)
             yield name, param
+
+
+def get_gguf_unquantized_params(gguf_files: list[str]) -> list[str]:
+    _QUANT_TYPES = ("F32", "BF16", "F16")
+    return list(
+        {
+            tensor.name
+            for gguf_file in gguf_files
+            for tensor in gguf.GGUFReader(gguf_file).tensors
+            if tensor.tensor_type.name in _QUANT_TYPES
+        }
+    )
+    # for gguf_file in gguf_files:
+    #     reader = gguf.GGUFReader(gguf_file)
+    #     for tensor in reader.tensors:
+    #         if tensor.tensor_type.name in unquant_types:
+    #             yield tensor.name.rsplit(".", 1)[0]

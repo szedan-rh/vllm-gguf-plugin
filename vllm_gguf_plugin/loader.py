@@ -15,12 +15,11 @@ from vllm.model_executor.model_loader.utils import (
     initialize_model,
     process_weights_after_loading,
 )
+from .quantization import GGUFConfig
 from .weights_adapter import get_weights_adapter
-from .weight_utils import download_gguf
+from .weight_utils import download_gguf, resolve_local_gguf
 from vllm.utils.torch_utils import set_default_torch_dtype
 
-if TYPE_CHECKING:
-    from .quantization import GGUFConfig
 
 logger = init_logger(__name__)
 
@@ -48,7 +47,7 @@ class GGUFModelLoader(BaseModelLoader):
         if ":" in model_name_or_path:
             local_dir, quant_type = model_name_or_path.rsplit(":", 1)
             if os.path.isdir(local_dir):
-                return self._resolve_local_gguf(local_dir, quant_type)
+                return resolve_local_gguf(local_dir, quant_type)
             # remote repo_id:quant_type
             return download_gguf(
                 local_dir,
@@ -68,58 +67,35 @@ class GGUFModelLoader(BaseModelLoader):
             "<repo_id>/<filename>.gguf, or <repo_id>:<quant_type>)"
         )
 
-    @staticmethod
-    def _resolve_local_gguf(local_dir: str, quant_type: str) -> str:
-        """Find a GGUF file matching *quant_type* in a local directory."""
-        import glob as glob_mod
-        patterns = [
-            f"*-{quant_type}.gguf",
-            f"*-{quant_type}-*.gguf",
-        ]
-        matches: list[str] = []
-        for pat in patterns:
-            matches.extend(glob_mod.glob(os.path.join(local_dir, pat)))
-        if not matches:
-            raise ValueError(
-                f"No GGUF file matching quant_type '{quant_type}' "
-                f"found in {local_dir}"
-            )
-        matches.sort(key=lambda x: (x.count("-"), x))
-        return matches[0]
-
-    def _prepare_adapter_loading(self, model_config: ModelConfig):
+    def _prepare_adapter(self, model_config: ModelConfig):
         local_model_path = self._prepare_weights(model_config)
         adapter = get_weights_adapter(model_config.hf_config)
-        load_spec = adapter.prepare_loading(local_model_path, model_config)
-        return local_model_path, adapter, load_spec
+        adapter.prepare_loading(local_model_path, model_config)
+        return adapter
 
     def download_model(self, model_config: ModelConfig) -> None:
         self._prepare_weights(model_config)
 
     def load_weights(self, model: nn.Module, model_config: ModelConfig) -> None:
-        local_model_path, adapter, load_spec = self._prepare_adapter_loading(model_config)
-        model.load_weights(
-            adapter.load_weights(local_model_path, load_spec.gguf_to_hf_name_map)
-        )
+        adapter = self._prepare_adapter(model_config)
+        model.load_weights(adapter.prepare_weights(model_config))
 
     def load_model(
         self, vllm_config: VllmConfig, model_config: ModelConfig, prefix: str = ""
     ) -> nn.Module:
         device_config = vllm_config.device_config
-        local_model_path, adapter, load_spec = self._prepare_adapter_loading(model_config)
+        adapter = self._prepare_adapter(model_config)
         vllm_config.model_config.hf_config = model_config.hf_config
-        logger.debug("GGUF unquantized modules: %s", load_spec.unquantized_modules)
-        if TYPE_CHECKING:
-            vllm_config.quant_config = cast(GGUFConfig, vllm_config.quant_config)
-        vllm_config.quant_config.unquantized_modules.extend(load_spec.unquantized_modules)
+        logger.debug("GGUF unquantized modules: %s", adapter.load_spec.unquantized_modules)
+        vllm_config.quant_config = cast(GGUFConfig, vllm_config.quant_config)
+        vllm_config.quant_config.unquantized_modules.extend(adapter.load_spec.unquantized_modules)
 
         target_device = torch.device(device_config.device)
         with set_default_torch_dtype(model_config.dtype):
             with target_device:
                 model = initialize_model(vllm_config=vllm_config, prefix=prefix)
             model.load_weights(
-                adapter.load_weights(local_model_path, load_spec.gguf_to_hf_name_map)
+                adapter.prepare_weights(model_config),
             )
-
             process_weights_after_loading(model, model_config, target_device)
         return model

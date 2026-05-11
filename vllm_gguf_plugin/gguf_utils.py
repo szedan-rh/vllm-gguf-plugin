@@ -285,6 +285,18 @@ def extract_vocab_size_from_gguf(model_path: str | Path) -> int | None:
     return len(field.contents())
 
 
+def extract_lm_head_from_gguf(model_path: str | Path) -> bool:
+    """Check if GGUF file contains LM head weights based on tensor names."""
+    if not check_gguf_file(model_path):
+        return None
+
+    reader = gguf.GGUFReader(str(model_path))
+    for tensor in reader.tensors:
+        if tensor.name.endswith("output.weight"):
+            return True
+    return False
+
+
 def maybe_patch_hf_config_from_gguf(
     model: str,
     hf_config: PretrainedConfig,
@@ -313,6 +325,11 @@ def maybe_patch_hf_config_from_gguf(
         text_config = hf_config.get_text_config()
         if hasattr(text_config, "vocab_size"):
             text_config.update({"vocab_size": vocab_size})
+
+    has_lm_head = extract_lm_head_from_gguf(model)
+    if has_lm_head is not None:
+       text_config = hf_config.get_text_config()
+       text_config.update({"tie_word_embeddings": not has_lm_head})
 
     # Patch multimodal config if mmproj.gguf exists
     mmproj_path = detect_gguf_multimodal(model)
