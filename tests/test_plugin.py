@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 import vllm.engine.arg_utils as arg_utils_module
 import vllm.transformers_utils.config as config_module
 import vllm_gguf_plugin.config_parser as gguf_config_parser_module
+import vllm_gguf_plugin._jit as jit_module
 from transformers import PretrainedConfig
 from vllm.config.load import LoadConfig
 from vllm.engine.arg_utils import EngineArgs
@@ -286,3 +288,42 @@ def test_gguf_linear_preserves_cuda_weight_device(monkeypatch):
 
     assert layer.qweight.device.type == "cuda"
     assert layer.qweight_type.device.type == "cuda"
+
+
+def test_gguf_cuda_extension_uses_jit_loader(monkeypatch):
+    state = {"loaded": False}
+    captured = {}
+
+    monkeypatch.setattr(jit_module, "_gguf_ops_available", lambda: state["loaded"])
+    monkeypatch.setattr(jit_module.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(jit_module.torch.version, "cuda", "12.9", raising=False)
+    monkeypatch.setattr(jit_module.cpp_extension, "CUDA_HOME", "/usr/local/cuda")
+
+    def fake_load(**kwargs):
+        state["loaded"] = True
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(jit_module.cpp_extension, "load", fake_load)
+
+    jit_module.ensure_gguf_cuda_ops_loaded()
+    jit_module.ensure_gguf_cuda_ops_loaded()
+
+    assert captured["name"] == "vllm_gguf_plugin_gguf"
+    assert captured["with_cuda"] is True
+    assert captured["sources"] == [
+        str(jit_module._csrc_root() / "torch_bindings.cpp"),
+        str(jit_module._csrc_root() / "gguf" / "gguf_kernel.cu"),
+    ]
+    assert captured["extra_include_paths"] == [
+        str(jit_module._csrc_root()),
+        str(jit_module._csrc_root() / "gguf"),
+    ]
+
+
+def test_gguf_cuda_extension_requires_cuda_device(monkeypatch):
+    monkeypatch.setattr(jit_module, "_gguf_ops_available", lambda: False)
+    monkeypatch.setattr(jit_module.torch.cuda, "is_available", lambda: False)
+
+    with pytest.raises(RuntimeError, match="available CUDA device"):
+        jit_module.ensure_gguf_cuda_ops_loaded()

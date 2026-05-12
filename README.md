@@ -12,6 +12,11 @@ handler with a fully out-of-tree GGUF implementation.
 uv pip install -e . --torch-backend=auto
 ```
 
+The CUDA extension is now built with PyTorch JIT on first use instead of during
+package installation. That first CUDA GGUF op requires a working CUDA toolkit
+(`nvcc` via `CUDA_HOME` or `/usr/local/cuda`) and is then cached by
+`torch.utils.cpp_extension`.
+
 ## How it works
 
 - vLLM loads `vllm.general_plugins` during engine setup.

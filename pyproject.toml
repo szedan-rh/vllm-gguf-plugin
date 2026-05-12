@@ -14,9 +14,21 @@ dependencies = ["gguf>=0.17.0", "vllm"]
 [project.entry-points."vllm.general_plugins"]
 gguf = "vllm_gguf_plugin:register"
 
+[tool.setuptools]
+include-package-data = true
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["vllm_gguf_plugin*"]
+
+[tool.setuptools.package-data]
+vllm_gguf_plugin = [
+    "csrc/*.h",
+    "csrc/*.cpp",
+    "csrc/gguf/*.cu",
+    "csrc/gguf/*.cuh",
+    "csrc/gguf/*.h",
+]
 
 [tool.pytest.ini_options]
 markers = [
