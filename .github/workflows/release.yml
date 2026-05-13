@@ -111,11 +111,6 @@ jobs:
       - name: Build wheel
         run: ./scripts/build_release_wheel.sh
 
-      - name: Retag wheel as manylinux_2_28_x86_64
-        run: |
-          cd dist
-          python -m wheel tags --remove --platform-tag manylinux_2_28_x86_64 ./*.whl
-
       - name: Check wheel metadata
         run: python -m twine check dist/*.whl
 
@@ -158,11 +153,6 @@ jobs:
 
       - name: Build wheel
         run: ./scripts/build_release_wheel.sh
-
-      - name: Retag wheel as manylinux_2_28_x86_64
-        run: |
-          cd dist
-          python -m wheel tags --remove --platform-tag manylinux_2_28_x86_64 ./*.whl
 
       - name: Check wheel metadata
         run: python -m twine check dist/*.whl
