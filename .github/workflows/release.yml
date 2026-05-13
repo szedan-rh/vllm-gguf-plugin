@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Validate release tag matches package version
+      - name: Validate release tag references package version
         if: github.event_name == 'release'
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -30,16 +30,21 @@ jobs:
           python - <<'PY'
           import os
           import pathlib
+          import re
           import tomllib
 
           project = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
           version = project["tool"]["vllm_gguf_plugin"]["base_version"]
           release_tag = os.environ["RELEASE_TAG"]
-          normalized_tag = release_tag[1:] if release_tag.startswith("v") else release_tag
+          version_tokens = {
+              token
+              for token in re.split(r"[-+_/]", release_tag)
+              if token
+          }
 
-          if normalized_tag != version:
+          if version not in version_tokens and f"v{version}" not in version_tokens:
               raise SystemExit(
-                  f"Release tag {release_tag!r} does not match pyproject version {version!r}."
+                  f"Release tag {release_tag!r} does not reference pyproject version {version!r}."
               )
 
           print(f"Building sdist for version {version}")
