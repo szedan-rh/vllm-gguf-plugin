@@ -1,8 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import pathlib
 import sys
 
+import tomllib
 from setuptools import setup
+
+
+def _package_version() -> str:
+    project = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
+    version = project["tool"]["vllm_gguf_plugin"]["base_version"]
+    suffix = os.environ.get("VLLM_GGUF_PLUGIN_LOCAL_VERSION_SUFFIX")
+    if not suffix:
+        return version
+    normalized_suffix = suffix if suffix.startswith("+") else f"+{suffix}"
+    return f"{version}{normalized_suffix}"
 
 
 def _should_build_extension() -> bool:
@@ -10,7 +23,7 @@ def _should_build_extension() -> bool:
     return not any(command in packaging_commands for command in sys.argv[1:])
 
 
-setup_kwargs: dict = {}
+setup_kwargs: dict = {"version": _package_version()}
 
 if _should_build_extension():
     from torch.utils.cpp_extension import BuildExtension, CUDAExtension

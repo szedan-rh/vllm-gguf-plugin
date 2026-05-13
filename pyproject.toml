@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vllm-gguf-plugin"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Out-of-tree GGUF quantization plugin for vLLM"
 readme = "README.md"
 license = "Apache-2.0"
@@ -20,6 +20,9 @@ gguf = "vllm_gguf_plugin:register"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["vllm_gguf_plugin*"]
+
+[tool.vllm_gguf_plugin]
+base_version = "0.0.1"
 
 [tool.ruff.lint]
 select = [
