@@ -18,7 +18,7 @@ cuda_minor=${cuda_release#*.}
 if [ "$cuda_major" -ge 13 ]; then
     export TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.7;8.9;9.0;10.0;11.0;12.0"
 elif [ "$cuda_major" -ge 12 ] && [ "$cuda_minor" -ge 8 ]; then
-    export TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.7;8.9;9.0;10.0;12.0;12.1"
+    export TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.7;8.9;9.0;10.0"
 else
     export TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.7;8.9;9.0"
 fi
