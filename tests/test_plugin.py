@@ -19,6 +19,7 @@ from vllm.model_executor.layers.vocab_parallel_embedding import VocabParallelEmb
 from vllm.model_executor.model_loader import get_model_loader
 from vllm.transformers_utils.config import get_config_parser
 
+import vllm_gguf_plugin._jit as jit_module
 import vllm_gguf_plugin.config_parser as gguf_config_parser_module
 import vllm_gguf_plugin.quantization as gguf_quantization
 from vllm_gguf_plugin import OOTGGUFConfig, OOTGGUFModelLoader, register
@@ -336,7 +337,7 @@ def test_gguf_cuda_extension_uses_jit_loader(monkeypatch):
     jit_module.ensure_gguf_cuda_ops_loaded()
     jit_module.ensure_gguf_cuda_ops_loaded()
 
-    assert captured["name"] == "vllm_gguf_plugin_gguf"
+    assert captured["name"] == "_C_gguf"
     assert captured["with_cuda"] is True
     assert captured["sources"] == [
         str(jit_module._csrc_root() / "torch_bindings.cpp"),
@@ -345,6 +346,12 @@ def test_gguf_cuda_extension_uses_jit_loader(monkeypatch):
     assert captured["extra_include_paths"] == [
         str(jit_module._csrc_root()),
         str(jit_module._csrc_root() / "gguf"),
+    ]
+    assert captured["extra_cuda_cflags"] == [
+        "-O3",
+        "-std=c++17",
+        "--use_fast_math",
+        "-DUSE_CUDA",
     ]
 
 

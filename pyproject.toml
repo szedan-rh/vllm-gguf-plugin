@@ -24,6 +24,15 @@ include-package-data = true
 where = ["."]
 include = ["vllm_gguf_plugin*"]
 
+[tool.setuptools.package-data]
+vllm_gguf_plugin = [
+    "csrc/*.h",
+    "csrc/*.cpp",
+    "csrc/gguf/*.h",
+    "csrc/gguf/*.cu",
+    "csrc/gguf/*.cuh",
+]
+
 [tool.ruff.lint]
 select = [
     # pycodestyle

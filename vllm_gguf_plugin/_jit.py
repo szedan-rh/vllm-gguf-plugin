@@ -7,9 +7,8 @@ from threading import Lock
 import torch
 from torch.utils import cpp_extension
 
-
 _GGUF_LIBRARY_NAMESPACE = "_C_gguf"
-_JIT_EXTENSION_NAME = "vllm_gguf_plugin_gguf"
+_JIT_EXTENSION_NAME = "_C_gguf"
 _BUILD_LOCK = Lock()
 
 
@@ -41,12 +40,17 @@ def ensure_gguf_cuda_ops_loaded() -> None:
         return
 
     if not torch.cuda.is_available():
-        raise RuntimeError("vllm-gguf-plugin CUDA kernels require an available CUDA device.")
+        raise RuntimeError(
+            "vllm-gguf-plugin CUDA kernels require an available CUDA device."
+        )
     if torch.version.cuda is None:
-        raise RuntimeError("vllm-gguf-plugin CUDA kernels require a CUDA-enabled PyTorch build.")
+        raise RuntimeError(
+            "vllm-gguf-plugin CUDA kernels require a CUDA-enabled PyTorch build."
+        )
     if cpp_extension.CUDA_HOME is None:
         raise RuntimeError(
-            "vllm-gguf-plugin could not find the CUDA toolkit. Set CUDA_HOME before using GGUF CUDA ops."
+            "vllm-gguf-plugin could not find the CUDA toolkit. Set CUDA_HOME "
+            "before using GGUF CUDA ops."
         )
 
     with _BUILD_LOCK:
@@ -61,7 +65,7 @@ def ensure_gguf_cuda_ops_loaded() -> None:
             name=_JIT_EXTENSION_NAME,
             sources=_extension_sources(),
             extra_cflags=["-O3", "-std=c++17"],
-            extra_cuda_cflags=["-O3", "-std=c++17", "--use_fast_math"],
+            extra_cuda_cflags=["-O3", "-std=c++17", "--use_fast_math", "-DUSE_CUDA"],
             extra_include_paths=_include_paths(),
             build_directory=build_directory,
             verbose=os.environ.get("VLLM_GGUF_PLUGIN_JIT_VERBOSE") == "1",
