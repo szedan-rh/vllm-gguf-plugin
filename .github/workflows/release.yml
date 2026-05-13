@@ -107,8 +107,6 @@ jobs:
     env:
       DEBIAN_FRONTEND: noninteractive
       VLLM_GGUF_PLUGIN_LOCAL_VERSION_SUFFIX: ${{ matrix.cuda.local_version_suffix }}
-      UV_PYTHON: /opt/build-venv/bin/python
-      UV_PYTHON_DOWNLOADS: never
 
     steps:
       - name: Install base tooling
@@ -130,6 +128,8 @@ jobs:
           uv python install 3.11
           uv venv /opt/build-venv --python 3.11
           echo "/opt/build-venv/bin" >> "$GITHUB_PATH"
+          echo "UV_PYTHON=/opt/build-venv/bin/python" >> "$GITHUB_ENV"
+          echo "UV_PYTHON_DOWNLOADS=never" >> "$GITHUB_ENV"
 
       - name: Install build dependencies
         run: |
