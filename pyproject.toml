@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vllm-gguf-plugin"
-version = "0.1.0"
+version = "0.0.1"
 description = "Out-of-tree GGUF quantization plugin for vLLM"
 readme = "README.md"
 license = "Apache-2.0"

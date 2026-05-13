@@ -135,6 +135,7 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
+      contents: write
       id-token: write
 
     environment:
@@ -153,14 +154,22 @@ jobs:
           name: python-wheel
           path: dist
 
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+
       - name: Publish package to PyPI
+        if: ${{ !github.event.release.prerelease }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
 
   publish-testpypi:
     needs: [build-sdist, build-wheel]
-    if: github.event_name == 'workflow_dispatch'
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'release' && github.event.release.prerelease)
     runs-on: ubuntu-latest
 
     permissions:
